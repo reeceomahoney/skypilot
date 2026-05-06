@@ -568,13 +568,57 @@ def start_skylet_on_head_node(
     # info, other options, and cluster identity / accelerator context for
     # skylet's heartbeat event.
     set_skypilot_env_var_cmd = _set_skypilot_env_var_cmd()
-    returncode, stdout, stderr = head_runner.run(
-        f'{set_usage_run_id_cmd}; {set_skypilot_env_var_cmd}; '
-        f'{MAYBE_SKYLET_RESTART_CMD}',
-        stream_logs=False,
-        require_outputs=True,
-        log_path=log_path_abs,
-        source_bashrc=True)
+
+    if cluster_info.provider_name == 'slurm':
+        # On Slurm with proctrack=cgroup, processes started by an
+        # `srun --overlap` step (which is what SSH-via-websocket-proxy uses)
+        # are killed when that step ends. Running attempt_skylet over SSH
+        # would therefore start skylet only to have it cgroup-killed on
+        # disconnect. Instead, hand off to the main sbatch step: drop the
+        # env vars into a file and touch the trigger file the sbatch loop
+        # is watching. The skylet that loop spawns lives in the main step's
+        # cgroup and survives. See provision/slurm/instance.py for the
+        # matching loop.
+        env_file = f'~/{constants.SLURM_SKYLET_ENV_FILE}'
+        trigger_file = f'~/{constants.SLURM_SKYLET_TRIGGER_FILE}'
+        done_file = f'~/{constants.SLURM_SKYLET_DONE_FILE}'
+        log_file = f'~/{constants.SLURM_SKYLET_START_LOG}'
+        # Concatenated env-setting commands (`export K=v; export K2=v2; ...`)
+        # are valid shell, so we can dump them straight into a file the
+        # sbatch loop will source.
+        env_payload = f'{set_usage_run_id_cmd}; {set_skypilot_env_var_cmd};'
+        cmd = (
+            # Atomic-ish write so the loop never sources a half-written file.
+            f'cat > {env_file}.tmp <<\'SKY_EOF\'\n{env_payload}\nSKY_EOF\n'
+            f'mv {env_file}.tmp {env_file} && '
+            f'rm -f {done_file} && '
+            f'touch {trigger_file} && '
+            # Wait up to 60s for the sbatch loop to handle the trigger.
+            f'for i in $(seq 1 60); do '
+            f'  [ -f {done_file} ] && break; sleep 1; '
+            f'done && '
+            f'[ -f {done_file} ] || {{ '
+            f'  echo "skylet trigger handler timed out"; '
+            f'  cat {log_file} 2>/dev/null; '
+            f'  exit 1; '
+            f'}} && '
+            f'rm -f {done_file} && '
+            # Surface attempt_skylet's stdout so callers see the same trail
+            # they would have over the historical SSH path.
+            f'cat {log_file} 2>/dev/null || true')
+        returncode, stdout, stderr = head_runner.run(cmd,
+                                                     stream_logs=False,
+                                                     require_outputs=True,
+                                                     log_path=log_path_abs,
+                                                     source_bashrc=False)
+    else:
+        returncode, stdout, stderr = head_runner.run(
+            f'{set_usage_run_id_cmd}; {set_skypilot_env_var_cmd}; '
+            f'{MAYBE_SKYLET_RESTART_CMD}',
+            stream_logs=False,
+            require_outputs=True,
+            log_path=log_path_abs,
+            source_bashrc=True)
     if returncode:
         raise RuntimeError('Failed to start skylet on the head node '
                            f'(exit code {returncode}). Error: '

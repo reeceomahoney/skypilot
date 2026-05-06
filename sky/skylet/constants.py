@@ -711,6 +711,17 @@ X86_64_ARCH = 'x86_64'
 # Used by the executor to conditionally apply multi-node barrier.
 SLURM_PROCTRACK_TYPE_FILE = '.sky_proctrack_type'
 
+# Files used to start skylet from the main sbatch step on Slurm clusters with
+# proctrack=cgroup. The API server writes env vars to SLURM_SKYLET_ENV_FILE,
+# touches SLURM_SKYLET_TRIGGER_FILE, then waits for SLURM_SKYLET_DONE_FILE.
+# The sbatch script's main loop does the actual `attempt_skylet` invocation,
+# so the resulting skylet daemon lives in the main step's cgroup and survives
+# after the triggering srun step ends.
+SLURM_SKYLET_ENV_FILE = '.skylet_env'
+SLURM_SKYLET_TRIGGER_FILE = '.skylet_start_trigger'
+SLURM_SKYLET_DONE_FILE = '.skylet_started'
+SLURM_SKYLET_START_LOG = '.skylet_start.log'
+
 SSH_DISABLE_LATENCY_MEASUREMENT_ENV_VAR = (
     f'{SKYPILOT_ENV_VAR_PREFIX}SSH_DISABLE_LATENCY_MEASUREMENT')
 

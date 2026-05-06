@@ -616,6 +616,40 @@ echo '{proctrack_type or "unknown"}' > {sky_cluster_home_dir}/{skylet_constants.
 touch {sky_cluster_home_dir}/.hushlogin
 {container_block}
 {f'touch {ready_signal}' if container_image is None else ''}
+# Loop in the main sbatch step waiting for skylet-start triggers from the API
+# server. We start skylet here (rather than over a separate srun --overlap
+# session) so the daemon lives in the main step's cgroup. Without this, on
+# clusters with proctrack=cgroup the skylet would be killed when the
+# triggering srun step ends, leaving the cluster in a state where no jobs
+# can be submitted.
+SKYLET_TRIGGER={sky_cluster_home_dir}/{skylet_constants.SLURM_SKYLET_TRIGGER_FILE}
+SKYLET_DONE={sky_cluster_home_dir}/{skylet_constants.SLURM_SKYLET_DONE_FILE}
+SKYLET_ENV_FILE={sky_cluster_home_dir}/{skylet_constants.SLURM_SKYLET_ENV_FILE}
+SKYLET_START_LOG={sky_cluster_home_dir}/{skylet_constants.SLURM_SKYLET_START_LOG}
+while true; do
+    if [ -f "$SKYLET_TRIGGER" ]; then
+        rm -f "$SKYLET_TRIGGER"
+        # Run attempt_skylet in a subshell so the env mutations (HOME,
+        # SKY_RUNTIME_DIR, virtualenv) don't leak into subsequent iterations.
+        # The skylet daemon attempt_skylet spawns is nohup'd; it survives the
+        # subshell exit and stays in the main sbatch step's cgroup.
+        (
+            # Mirror the env that SlurmCommandRunner._run_via_srun sets when
+            # running commands over SSH, so attempt_skylet sees the same world
+            # whether triggered from here or from the historical SSH path.
+            if [ -f "$SKYLET_ENV_FILE" ]; then . "$SKYLET_ENV_FILE"; fi
+            export SKY_RUNTIME_DIR={skypilot_runtime_dir}
+            cd {sky_cluster_home_dir}
+            export HOME="$PWD"
+            if [ -f "$SKY_RUNTIME_DIR/skypilot-runtime/bin/activate" ]; then
+                . "$SKY_RUNTIME_DIR/skypilot-runtime/bin/activate"
+            fi
+            python3 -m sky.skylet.attempt_skylet
+        ) > "$SKYLET_START_LOG" 2>&1 || true
+        touch "$SKYLET_DONE"
+    fi
+    sleep 1
+done &
 {'sleep infinity' if container_image is None else 'wait'}
 """
     # fmt: on
