@@ -47,7 +47,6 @@ _SBATCH_PROTECTED_OPTIONS = frozenset({
     'output',
     'error',
     'nodes',
-    'time',
     'wait-all-nodes',
     'no-requeue',
     'cpus-per-task',
@@ -55,6 +54,11 @@ _SBATCH_PROTECTED_OPTIONS = frozenset({
     'gres',
     'partition',
 })
+# 'time' is intentionally not protected: clusters with QoS limits below the
+# partition's MaxTime (which SkyPilot uses by default) need to override --time
+# via slurm.sbatch_options. The user-supplied #SBATCH --time directive comes
+# after the SkyPilot-emitted one in the script, and Slurm's last-wins rule
+# applies, so the user's value takes effect.
 
 
 def _build_custom_sbatch_directives(sbatch_options: Dict[str, Any]) -> str:
